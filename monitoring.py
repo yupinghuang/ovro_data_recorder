@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import shutil
 import time
 import numpy
 import threading
@@ -11,7 +12,7 @@ from bifrost.proclog import load_by_pid
 
 from mnc.mcs import MonitorPoint, Client
 
-__all__ = ['PerformanceLogger', 'StorageLogger', 'StatusLogger', 'GlobalLogger']
+__all__ = ['PerformanceLogger', 'StatusLogger', 'GlobalLogger']
 
 
 def interruptable_sleep(seconds, sub_interval=0.1):
@@ -238,11 +239,19 @@ class StorageLogger(object):
             current_files.sort()    # The files should have sensible names that
                                     # reflect their creation times
             
+            new_files = []
+            new_file_sizes = []
             for filename in current_files:
-                if filename not in self._files:
-                    filesize = getsize(filename)
-                    self._files.append(filename)
-                    self._file_sizes.append(filesize)
+                try:
+                    i = self._files.index(filename)
+                    new_files.append(filename)
+                    new_file_sizes.append(self._file_sizes[i])
+                except ValueError:
+                    size = getsize(filename)
+                    new_files.append(filename)
+                    new_file_sizes.append(size)
+            self._files = new_files
+            self._file_sizes = new_file_sizes
         except Exception as e:
             self.log.warning("Quota manager could not refresh the file list: %s", str(e))
             
@@ -253,23 +262,18 @@ class StorageLogger(object):
         t0 = time.time()
         total_size = sum(self._file_sizes)
         
-        i = 0
         removed = 0
         removed_size = 0
         while total_size > self.quota and len(self._files) > 1:
+            to_remove = self._files.pop()
+            size = self._file_sizes.pop()
             try:
-                subprocess.check_call(['rm', '-rf', self._files[i]],
-                                       stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL)
+                shutil.rmtree(to_remove)
                 removed += 1
-                removed_size += self._file_sizes[i]
-                total_size -= self._file_sizes[i]
-                
-                del self._files[i]
-                del self._file_sizes[i]
+                removed_size += size
+                total_size -= size
             except Exception as e:
                 self.log.warning("Quota manager could not remove '%s': %s", to_remove, str(e))
-                i += 1
                 
         if removed > 0:
             self.log.debug("=== Quota Report ===")
@@ -568,7 +572,7 @@ class StatusLogger(object):
 
 class GlobalLogger(object):
     """
-    Monitoring class that wraps :py:class:`PerformanceLogger`, :py:class:`StorageLogger`,
+    Monitoring class that wraps :py:class:`PerformanceLogger`,
     and :py:class:`StatusLogger` and runs their main methods as a unit.
     """
     
@@ -582,9 +586,6 @@ class GlobalLogger(object):
         
         self.perf = PerformanceLogger(log, id, queue, shutdown_event=shutdown_event,
                                       update_interval=update_interval_perf)
-        self.storage = StorageLogger(log, id, args.record_directory, quota=quota,
-                                     shutdown_event=shutdown_event,
-                                     update_interval=update_interval_storage)
         self.status = StatusLogger(log, id, queue, nthread=nthread,
                                    gulp_time=gulp_time,
                                    shutdown_event=shutdown_event,
@@ -597,7 +598,7 @@ class GlobalLogger(object):
     @shutdown_event.setter
     def shutdown_event(self, event):
         self._shutdown_event = event
-        for attr in ('perf', 'storage', 'status'):
+        for attr in ('perf', 'status'):
             logger = getattr(self, attr, None)
             if logger is None:
                 continue
@@ -611,7 +612,6 @@ class GlobalLogger(object):
         # Create the per-logger threads
         threads = []
         threads.append(threading.Thread(target=self.perf.main, name='PerformanceLogger'))
-        threads.append(threading.Thread(target=self.storage.main, name='StorageLogger'))
         threads.append(threading.Thread(target=self.status.main, name='StatusLogger'))
         
         # Start the threads

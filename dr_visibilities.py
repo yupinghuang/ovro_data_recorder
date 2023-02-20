@@ -17,6 +17,7 @@ import signal
 import logging
 import argparse
 import threading
+import multiprocessing as mp
 from functools import reduce
 from datetime import datetime, timedelta
 
@@ -834,7 +835,7 @@ def main(argv):
                             ntime_gulp=args.gulp_size, core=cores.pop(0)))
     ops.append(WriterOp(log, station, capture_ring,
                         ntime_gulp=args.gulp_size, fast=args.quick, core=cores.pop(0)))
-    ops.append(GlobalLogger(log, mcs_id, args, QUEUE, quota=args.record_directory_quota,
+    ops.append(GlobalLogger(log, mcs_id, args, QUEUE,
                             nthread=len(ops)+8, gulp_time=args.gulp_size*2400*(1 if args.quick else 100)*8192/196e6))  # Ugh, hard coded
     ops.append(VisibilityCommandProcessor(log, mcs_id, args.record_directory, QUEUE,
                                           nint_per_file=args.nint_per_file,
